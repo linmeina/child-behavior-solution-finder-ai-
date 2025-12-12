@@ -1,123 +1,26 @@
-import { GoogleGenAI, Type, Schema } from "@google/genai";
 import { UserInput, AnalysisResult, Language } from "../types";
 
-// Safely retrieve API Key (handles environments where process is undefined)
-const getApiKey = (): string => {
-  try {
-    if (typeof process !== 'undefined' && process.env && process.env.API_KEY) {
-      return process.env.API_KEY;
-    }
-  } catch (e) {
-    // Ignore error
+// Helper function to call the backend API
+const callGeminiApi = async (task: 'analyzeBehavior' | 'getABAInfo', prompt: string) => {
+  const response = await fetch('/api/gemini', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      task,
+      prompt,
+      model: "gemini-2.5-flash"
+    }),
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new Error(errorData.error || `Server Error: ${response.status}`);
   }
-  // Return empty string or handle error appropriately in UI if key is missing
-  return '';
-};
 
-const ai = new GoogleGenAI({ apiKey: getApiKey() });
-
-const analysisSchema: Schema = {
-  type: Type.OBJECT,
-  properties: {
-    summary: {
-      type: Type.OBJECT,
-      properties: {
-        behavior: { type: Type.STRING, description: "Object summary of the behavior" },
-        emotionalInterpretation: { type: Type.STRING, description: "Separated emotional interpretation" },
-      },
-      required: ["behavior", "emotionalInterpretation"],
-    },
-    functionAnalysis: {
-      type: Type.OBJECT,
-      properties: {
-        scores: {
-          type: Type.OBJECT,
-          properties: {
-            escape: { type: Type.NUMBER, description: "0-5 scale for Escape" },
-            attention: { type: Type.NUMBER, description: "0-5 scale for Attention" },
-            tangible: { type: Type.NUMBER, description: "0-5 scale for Tangible" },
-            sensory: { type: Type.NUMBER, description: "0-5 scale for Sensory" },
-          },
-          required: ["escape", "attention", "tangible", "sensory"],
-        },
-        mainFunctionExplanation: { type: Type.STRING, description: "Detailed explanation of the highest scoring function" },
-      },
-      required: ["scores", "mainFunctionExplanation"],
-    },
-    mechanism: {
-      type: Type.OBJECT,
-      properties: {
-        triggers: { type: Type.STRING, description: "Antecedent/Triggers" },
-        consequences: { type: Type.STRING, description: "Consequences" },
-        pattern: { type: Type.STRING, description: "Repeated pattern" },
-      },
-      required: ["triggers", "consequences", "pattern"],
-    },
-    preventionStrategies: {
-      type: Type.ARRAY,
-      items: { type: Type.STRING },
-      description: "List of 5-8 prevention strategies",
-    },
-    teachingSkills: {
-      type: Type.ARRAY,
-      items: {
-        type: Type.OBJECT,
-        properties: {
-          skill: { type: Type.STRING },
-          script: { type: Type.STRING, description: "Example script for parents" },
-        },
-        required: ["skill", "script"],
-      },
-    },
-    consequenceStrategies: {
-      type: Type.OBJECT,
-      properties: {
-        reinforce: { type: Type.STRING },
-        ignore: { type: Type.STRING },
-        natural: { type: Type.STRING },
-        safety: { type: Type.STRING },
-      },
-      required: ["reinforce", "ignore", "natural", "safety"],
-    },
-    commonMistakes: {
-      type: Type.ARRAY,
-      items: {
-        type: Type.OBJECT,
-        properties: {
-          mistake: { type: Type.STRING },
-          reason: { type: Type.STRING },
-        },
-        required: ["mistake", "reason"],
-      },
-    },
-    checklist: {
-      type: Type.OBJECT,
-      properties: {
-        items: { type: Type.ARRAY, items: { type: Type.STRING }, description: "Items to track for 7 days" },
-        goal: { type: Type.STRING, description: "Goal (frequency/duration etc)" },
-        successCriteria: { type: Type.STRING, description: "Success criteria" },
-      },
-      required: ["items", "goal", "successCriteria"],
-    },
-    redFlags: {
-      type: Type.ARRAY,
-      items: { type: Type.STRING },
-      description: "Red flags requiring professional help",
-    },
-    closingComment: { type: Type.STRING, description: "Warm closing encouragement" },
-  },
-  required: [
-    "summary",
-    "functionAnalysis",
-    "mechanism",
-    "preventionStrategies",
-    "teachingSkills",
-    "consequenceStrategies",
-    "commonMistakes",
-    "checklist",
-    "redFlags",
-    "closingComment",
-  ],
+  const data = await response.json();
+  return data.text;
 };
 
 export const analyzeBehavior = async (input: UserInput, language: Language = 'ko'): Promise<AnalysisResult> => {
@@ -213,7 +116,7 @@ into all 10 sections of the behavior solution.
 - Do NOT mix multiple languages in one answer.
 - Keep language simple enough for non-professional parents.
 - You are providing educational guidance, NOT medical diagnosis.
-- Output MUST follow the structured JSON schema provided below.
+- Output MUST follow the structured JSON schema.
 
 [Role & Persona]
 You are a "Child Behavior Solution Finder AI" for parents and experts.
@@ -226,26 +129,17 @@ User Input:
   `;
 
   try {
-    const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
-      contents: prompt,
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: analysisSchema,
-        temperature: 0.7, 
-      },
-    });
-
-    const text = response.text;
+    const text = await callGeminiApi('analyzeBehavior', prompt);
     if (!text) throw new Error("No response from AI");
     
     return JSON.parse(text) as AnalysisResult;
   } catch (error) {
     console.error("Error analyzing behavior:", error);
+    
     const errorMsg = {
-      'ko': "분석 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요. (API KEY 확인 필요)",
-      'en': "An error occurred during analysis. Please try again later. (Check API KEY)",
-      'zh-CN': "分析过程中发生错误。请稍后再试。(请检查 API KEY)"
+      'ko': "분석 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.",
+      'en': "An error occurred during analysis. Please try again later.",
+      'zh-CN': "分析过程中发生错误。请稍后再试。"
     };
     throw new Error(errorMsg[language] || errorMsg['en']);
   }
@@ -334,17 +228,8 @@ Do NOT generate any other content.
   `;
 
   try {
-    const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
-      contents: prompt,
-      config: {
-        temperature: 0.1, // Low temperature for consistent output
-      },
-    });
-
-    const text = response.text;
+    const text = await callGeminiApi('getABAInfo', prompt);
     if (!text) throw new Error("No response from AI");
-    
     return text.trim();
   } catch (error) {
     console.error("Error fetching ABA info:", error);
